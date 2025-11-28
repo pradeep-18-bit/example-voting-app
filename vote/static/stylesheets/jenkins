@@ -1,0 +1,116 @@
+pipeline {
+  agent any
+
+  environment {
+    DOCKERHUB_CREDS = 'dockerhub'
+    SSH_CRED_ID     = 'ec2-ssh'
+    DOCKER_USER     = 'pradeep065'
+    TARGET_HOST     = '13.233.48.31'
+    REMOTE_PATH     = '/home/ubuntu/voting-app'
+  }
+
+  options {
+    timeout(time: 60, unit: 'MINUTES')
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        git branch: 'main', url: 'https://github.com/pradeep-18-bit/example-voting-app.git'
+      }
+    }
+
+    stage('Debug SSH Key') {
+      steps {
+        sshagent(credentials: ["${SSH_CRED_ID}"]) {
+          sh 'ssh-add -l'
+        }
+      }
+    }
+
+    /*******************************
+     * ALWAYS RESET DATABASE
+     *******************************/
+    stage('Reset Database') {
+      steps {
+        echo "⚠ DB RESET ENABLED — wiping Postgres volume on EC2..."
+
+        sshagent(credentials: ["${SSH_CRED_ID}"]) {
+          sh """
+            ssh -o StrictHostKeyChecking=no ubuntu@${TARGET_HOST} '
+              echo "Stopping containers..."
+              docker compose -f ${REMOTE_PATH}/docker-compose.prod.yml down
+
+              echo "Removing DB volume..."
+              docker volume rm voting-app_db-data || true
+              docker volume rm db-data || true
+
+              echo "Starting fresh empty DB..."
+              docker compose -f ${REMOTE_PATH}/docker-compose.prod.yml up -d
+
+              echo "DB Reset completed!"
+            '
+          """
+        }
+      }
+    }
+
+    stage('Build Docker Images') {
+      steps {
+        script {
+          sh "docker build -t ${DOCKER_USER}/voting-app-vote:latest ./vote"
+          sh "docker build -t ${DOCKER_USER}/voting-app-result:latest ./result"
+          sh "docker build -t ${DOCKER_USER}/voting-app-worker:latest ./worker"
+
+          sh """
+            SHA=\$(git rev-parse --short=8 HEAD)
+            docker tag ${DOCKER_USER}/voting-app-vote:latest ${DOCKER_USER}/voting-app-vote:\$SHA
+            docker tag ${DOCKER_USER}/voting-app-result:latest ${DOCKER_USER}/voting-app-result:\$SHA
+            docker tag ${DOCKER_USER}/voting-app-worker:latest ${DOCKER_USER}/voting-app-worker:\$SHA
+          """
+        }
+      }
+    }
+
+    stage('Push Images to DockerHub') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDS}", usernameVariable: 'DH_USER', passwordVariable: 'DH_PSW')]) {
+          sh '''
+            echo "$DH_PSW" | docker login -u "$DH_USER" --password-stdin
+
+            SHA=$(git rev-parse --short=8 HEAD)
+
+            docker push pradeep065/voting-app-vote:$SHA
+            docker push pradeep065/voting-app-result:$SHA
+            docker push pradeep065/voting-app-worker:$SHA
+
+            docker push pradeep065/voting-app-vote:latest || true
+            docker push pradeep065/voting-app-result:latest || true
+            docker push pradeep065/voting-app-worker:latest || true
+          '''
+        }
+      }
+    }
+
+    stage('Deploy to EC2') {
+      steps {
+        sshagent(credentials: ["${SSH_CRED_ID}"]) {
+          sh """
+            ssh -o StrictHostKeyChecking=no ubuntu@${TARGET_HOST} '
+              cd ${REMOTE_PATH}
+              docker compose -f docker-compose.prod.yml pull
+              docker compose -f docker-compose.prod.yml up -d
+              echo "Deployment complete."
+            '
+          """
+        }
+      }
+    }
+  }
+
+  post {
+    success { echo "✅ Pipeline succeeded!" }
+    failure { echo "❌ Pipeline failed — check logs." }
+  }
+}
