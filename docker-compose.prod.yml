@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  vote:
+    image: pradeep065/voting-app-vote:latest
+    env_file:
+      - .env.production
+    ports:
+      - "5000:80"
+    depends_on:
+      - redis
+
+  result:
+    image: pradeep065/voting-app-result:latest
+    env_file:
+      - .env.production
+    ports:
+      - "5001:80"
+    depends_on:
+      - db
+
+  worker:
+    image: pradeep065/voting-app-worker:latest
+    env_file:
+      - .env.production
+    depends_on:
+      - db
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+volumes:
+  db-data:
