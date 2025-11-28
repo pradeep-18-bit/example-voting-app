@@ -11,8 +11,13 @@ app.controller('statsCtrl', function($scope){
   var updateScores = function(){
     socket.on('scores', function (json) {
        data = JSON.parse(json);
-       var a = parseInt(data.a || 0);
-       var b = parseInt(data.b || 0);
+
+       var a = parseInt(data.a || 0);   // Fun Day votes
+       var b = parseInt(data.b || 0);   // Early Home votes
+
+       // Store individual vote counts for display
+       $scope.aCount = a;
+       $scope.bCount = b;
 
        var percentages = getPercentages(a, b);
 
@@ -28,10 +33,11 @@ app.controller('statsCtrl', function($scope){
   };
 
   var init = function(){
-    document.body.style.opacity=1;
+    document.body.style.opacity = 1;
     updateScores();
   };
-  socket.on('message',function(data){
+
+  socket.on('message', function(data){
     init();
   });
 });
